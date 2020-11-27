@@ -1,4 +1,4 @@
-package dns
+package ndp_dns
 
 import (
 	"github.com/google/gopacket/layers"
@@ -18,7 +18,26 @@ type Handler interface {
 
 type Server struct {
 	port    int
-	handler *ServeMux
+	handler Handler
+}
+
+type customHandler func(string) (string, error)
+
+func generateHandler(records map[string]string, lookupFunc customHandler) func (w *udpConnection, r *layers.DNS) {
+	return func(w *udpConnection, r *layers.DNS) {
+		switch r.Questions[0].Type {
+		case layers.DNSTypeA:
+			handleATypeQuery(w, r, records, lookupFunc)
+		}
+	}
+}
+
+func (srv *Server) AddZoneData(zone string, records map[string]string,
+	lookupFunc func(string) (string, error), lookupZone ZoneType) {
+	if lookupZone == DNSForwardLookupZone {
+		serverMuxCurrent := srv.handler.(*ServeMux)
+		serverMuxCurrent.handleFunc(zone, generateHandler(records, lookupFunc))
+	}
 }
 
 func NewServer(port int) *Server {
@@ -105,4 +124,8 @@ type handlerConvert func(*udpConnection, *layers.DNS)
 // TODO: What is the purpose of this method for a func type?
 func (f handlerConvert) serveDNS(w *udpConnection, r *layers.DNS) {
 	f(w, r)
+}
+
+func handleATypeQuery(w *udpConnection, r *layers.DNS, records map[string]string, lookupFunc customHandler) {
+	panic("handleATypeQuery() has not been implemented.")
 }
