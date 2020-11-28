@@ -1,6 +1,8 @@
 package ndp_dns
 
 import (
+	"fmt"
+	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"net"
 )
@@ -17,14 +19,16 @@ type Handler interface {
 }
 
 type Server struct {
+	ip      string
 	port    int
 	handler Handler
 }
 
 type customHandler func(string) (string, error)
 
-func generateHandler(records map[string]string, lookupFunc customHandler) func (w *udpConnection, r *layers.DNS) {
+func generateHandler(records map[string]string, lookupFunc customHandler) func(w *udpConnection, r *layers.DNS) {
 	return func(w *udpConnection, r *layers.DNS) {
+		// In this example, the handler will only handle the DNS request with type A.
 		switch r.Questions[0].Type {
 		case layers.DNSTypeA:
 			handleATypeQuery(w, r, records, lookupFunc)
@@ -37,6 +41,36 @@ func (srv *Server) AddZoneData(zone string, records map[string]string,
 	if lookupZone == DNSForwardLookupZone {
 		serverMuxCurrent := srv.handler.(*ServeMux)
 		serverMuxCurrent.handleFunc(zone, generateHandler(records, lookupFunc))
+	}
+}
+
+func (srv *Server) StartAndServe() {
+	if srv.ip == "" {
+		srv.ip = "127.0.0.1"
+	}
+	addr := net.UDPAddr{
+		Port: srv.port,
+		IP: net.ParseIP(srv.ip),
+	}
+	l, _ := net.ListenUDP("udp", &addr)
+	fmt.Println("Start to serve and listen.")
+	udpConnection := &udpConnection{conn: l}
+	srv.serve(udpConnection)
+}
+
+func (srv *Server) serve(u *udpConnection) {
+	for {
+		tmp := make([]byte, 1024)
+		_, addr, _ := u.conn.ReadFrom(tmp)
+		u.addr = addr
+		// NewPacket creates a new Packet object from a set of bytes.
+		// layers.LayerTypeDNS: DNS Decoder
+		// gopacket.Default: Decode Options
+		packet := gopacket.NewPacket(tmp, layers.LayerTypeDNS, gopacket.Default)
+		// Layer returns the first layer in this packet of the given type, or nil
+		dnsPacket := packet.Layer(layers.LayerTypeDNS)
+		tcp, _ := dnsPacket.(*layers.DNS)
+		srv.handler.serveDNS(u, tcp)
 	}
 }
 
@@ -55,15 +89,20 @@ func NewServerMux() *ServeMux {
 }
 
 func (srv *ServeMux) handleFunc(pattern string, f func(*udpConnection, *layers.DNS)) {
+	// Is handlerConvert() an explicit type conversion?
 	srv.handler[pattern] = handlerConvert(f)
 }
 
 func (srv *ServeMux) serveDNS(u *udpConnection, request *layers.DNS) {
-	//var h Handler
-	//if len(request.Questions) < 1 { // allow more than one question
-	//	return
-	//}
-	//if h = srv.ma
+	var h Handler
+	if len(request.Questions) < 1 { // allow more than one question
+		return
+	}
+	if h = srv.match(string(request.Questions[0].Name), request.Questions[0].Type); h == nil {
+		fmt.Println("No handler found for", string(request.Questions[0].Name))
+		return
+	}
+	h.serveDNS(u, request)
 }
 
 func (srv *ServeMux) match(q string, t layers.DNSType) Handler {
@@ -74,7 +113,7 @@ func (srv *ServeMux) match(q string, t layers.DNSType) Handler {
 	for {
 		l := len(q[off:])
 		for i := 0; i < l; i++ {
-			b[i] = q[off+1]
+			b[i] = q[off+i]
 			if b[i] >= 'A' && b[i] <= 'Z' {
 				// TODO: What is |=?
 				b[i] |= 'a' - 'A'
@@ -87,7 +126,9 @@ func (srv *ServeMux) match(q string, t layers.DNSType) Handler {
 			handler = h
 		}
 		off, end = nextLabel(q, off)
-		if end { break }
+		if end {
+			break
+		}
 	}
 	if h, ok := srv.handler["."]; ok {
 		return h
@@ -106,12 +147,12 @@ func nextLabel(s string, offset int) (i int, end bool) {
 				quote = !quote
 				continue
 			}
-			return i+1, false
+			return i + 1, false
 		default:
 			quote = false
 		}
 	}
-	return i+1, true
+	return i + 1, true
 }
 
 type udpConnection struct {
@@ -119,13 +160,61 @@ type udpConnection struct {
 	addr net.Addr
 }
 
+func (udp *udpConnection) Write(b []byte) error {
+	_, _ = udp.conn.WriteTo(b, udp.addr)
+	return nil
+}
+
 type handlerConvert func(*udpConnection, *layers.DNS)
 
 // TODO: What is the purpose of this method for a func type?
 func (f handlerConvert) serveDNS(w *udpConnection, r *layers.DNS) {
 	f(w, r)
+	//panic("serveDNS() has not been implemented.")
 }
 
 func handleATypeQuery(w *udpConnection, r *layers.DNS, records map[string]string, lookupFunc customHandler) {
-	panic("handleATypeQuery() has not been implemented.")
+	replyMess := r
+	var ip string
+	var err error
+	var ok bool
+	if lookupFunc == nil {
+		// what is the questions
+		ip, ok = records[string(r.Questions[0].Name)]
+		if !ok {
+			fmt.Println("No IP found in records.")
+		}
+	} else {
+		ip, err = lookupFunc(string(r.Questions[0].Name))
+	}
+	a, _, _ := net.ParseCIDR(ip + "/24")
+	// DNSResourceRecord, see https://en.wikipedia.org/wiki/Domain_Name_System#Resource_records
+	var answer layers.DNSResourceRecord
+	// TYPE: specifies the type of query.
+	answer.Type = layers.DNSTypeA
+	// RDATA
+	answer.IP = a
+	// Name: Name of the node to which this record pertains
+	answer.Name = r.Questions[0].Name
+	answer.Class = layers.DNSClassIN
+
+	// DNS Message, see https://en.wikipedia.org/wiki/Domain_Name_System#DNS_message_format
+	// QR: A one-bit field that specifies whether this message is a query (0), or a response (1).
+	replyMess.QR = true
+	// ANCOUNT: 16-bit field, denoting the number of answers in response
+	replyMess.ANCount = 1
+	// OPCODE: The type can be QUERY (standard query, 0), IQUERY (inverse query, 1), or STATUS (server status request, 2)
+	replyMess.OpCode = layers.DNSOpCodeNotify
+	// AA: Authoritative Answer, in a response, indicates if the DNS server is authoritative for the queried hostname
+	replyMess.AA = true
+	replyMess.Answers = append(replyMess.Answers, answer)
+	replyMess.ResponseCode = layers.DNSResponseCodeNoErr
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{}
+	err = replyMess.SerializeTo(buf, opts)
+	if err != nil {
+		panic(err)
+	}
+	_ = w.Write(buf.Bytes())
 }

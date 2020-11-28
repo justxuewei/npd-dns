@@ -9,4 +9,5 @@ func main()  {
 	}
 	dns := ndpdns.NewServer(10001)
 	dns.AddZoneData("google.com", googleRecords, nil, ndpdns.DNSForwardLookupZone)
+	dns.StartAndServe()
 }
