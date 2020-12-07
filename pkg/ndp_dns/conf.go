@@ -1,8 +1,16 @@
-package util
+package ndp_dns
 
 import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
+	"os"
+	"path/filepath"
+)
+
+type Env string
+
+const (
+	ConfPath Env = "NPD_DNS_CONF"
 )
 
 type RecordMap map[string]string
@@ -12,7 +20,29 @@ type Records struct {
 	Map        RecordMap
 }
 
-func read(path string) ([]Records, error) {
+type Conf struct {
+	path string
+}
+
+func (c *Conf) Read() ([]Records, error) {
+	if c.path == "" {
+		c.path = os.Getenv(string(ConfPath))
+		if c.path == "" {
+			dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+			if err != nil {
+				return nil, err
+			}
+			c.path = dir + "/conf.yaml"
+		}
+	}
+	conf, err := readConf(c.path)
+	if err != nil {
+		return nil, err
+	}
+	return conf, nil
+}
+
+func readConf(path string) ([]Records, error) {
 	content, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err

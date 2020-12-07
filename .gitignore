@@ -1,6 +1,8 @@
 .idea
 .DS_Store
 
+conf.yaml
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

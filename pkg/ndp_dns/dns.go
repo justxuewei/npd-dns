@@ -11,7 +11,7 @@ type ZoneType uint16
 
 const (
 	DNSForwardLookupZone ZoneType = 1
-	DNSReverseLookupZone ZoneType = 2
+	//DNSReverseLookupZone ZoneType = 2
 )
 
 type Handler interface {
@@ -41,6 +41,18 @@ func (srv *Server) AddZoneData(zone string, records map[string]string,
 	if lookupZone == DNSForwardLookupZone {
 		serverMuxCurrent := srv.handler.(*ServeMux)
 		serverMuxCurrent.handleFunc(zone, generateHandler(records, lookupFunc))
+	}
+}
+
+func (srv *Server) LoadConf() {
+	conf := Conf{}
+	records, err := conf.Read()
+	if err != nil {
+		fmt.Printf("Can't read conf from \"%s\", %s.\n", conf.path, err)
+		return
+	}
+	for _, record := range records {
+		srv.AddZoneData(record.DomainName, record.Map, nil, DNSForwardLookupZone)
 	}
 }
 
