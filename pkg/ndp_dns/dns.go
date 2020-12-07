@@ -46,14 +46,17 @@ func (srv *Server) AddZoneData(zone string, records map[string]string,
 
 func (srv *Server) StartAndServe() {
 	if srv.ip == "" {
-		srv.ip = "127.0.0.1"
+		srv.ip = "0.0.0.0"
 	}
 	addr := net.UDPAddr{
 		Port: srv.port,
 		IP: net.ParseIP(srv.ip),
 	}
-	l, _ := net.ListenUDP("udp", &addr)
-	fmt.Println("Start to serve and listen.")
+	l, err := net.ListenUDP("udp", &addr)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Start to serve and listen at %s:%d.", addr.IP, addr.Port)
 	udpConnection := &udpConnection{conn: l}
 	srv.serve(udpConnection)
 }
@@ -61,7 +64,10 @@ func (srv *Server) StartAndServe() {
 func (srv *Server) serve(u *udpConnection) {
 	for {
 		tmp := make([]byte, 1024)
-		_, addr, _ := u.conn.ReadFrom(tmp)
+		_, addr, err := u.conn.ReadFrom(tmp)
+		if err != nil {
+			panic(err)
+		}
 		u.addr = addr
 		// NewPacket creates a new Packet object from a set of bytes.
 		// layers.LayerTypeDNS: DNS Decoder
@@ -166,7 +172,6 @@ func (udp *udpConnection) Write(b []byte) error {
 
 type handlerConvert func(*udpConnection, *layers.DNS)
 
-// TODO: What is the purpose of this method for a func type?
 func (f handlerConvert) serveDNS(w *udpConnection, r *layers.DNS) {
 	f(w, r)
 	//panic("serveDNS() has not been implemented.")
