@@ -115,7 +115,6 @@ func (srv *ServeMux) match(q string, t layers.DNSType) Handler {
 		for i := 0; i < l; i++ {
 			b[i] = q[off+i]
 			if b[i] >= 'A' && b[i] <= 'Z' {
-				// TODO: What is |=?
 				b[i] |= 'a' - 'A'
 			}
 		}
